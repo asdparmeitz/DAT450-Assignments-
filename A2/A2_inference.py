@@ -3,6 +3,7 @@ import sys
 import os
 import nltk
 from transformers import PreTrainedModel
+from torch.distributions import Categorical
 
 # Ensure required NLTK tokenizers are available
 nltk.download('punkt', quiet=True)
@@ -34,83 +35,139 @@ if not hasattr(__main__, 'lowercase_tokenizer'):
 
 
 def load_model_and_tokenizer(model_dir=None, tokenizer_path=None):
-    """Load the trained model and tokenizer."""
+    """Load the pre-trained Transformer model and tokenizer."""
     if model_dir is None:
+        # Default to A2/trainer_output where the pre-trained model is located
         model_dir = os.path.join(SCRIPT_DIR, 'trainer_output')
+        print(f"Using pre-trained model directory: {model_dir}")
+    
     if tokenizer_path is None:
-        tokenizer_path = os.path.join(A1_DIR, 'tokenizer.pkl')
+        # Try base directory first, then A1 directory
+        base_tokenizer = os.path.join(BASE_DIR, 'tokenizer.pkl')
+        a1_tokenizer = os.path.join(A1_DIR, 'tokenizer.pkl')
+        
+        if os.path.exists(base_tokenizer):
+            tokenizer_path = base_tokenizer
+        elif os.path.exists(a1_tokenizer):
+            tokenizer_path = a1_tokenizer
+        else:
+            tokenizer_path = base_tokenizer  # Default
     
     print(f"Loading model from: {model_dir}")
     print(f"Loading tokenizer from: {tokenizer_path}")
     
     # Load tokenizer
-    # The tokenizer was pickled with a reference to lowercase_tokenizer
-    # We need to make sure it's available in __main__ module
     import pickle
-    
-    # First, try the standard method
     try:
         tokenizer = A1Tokenizer.from_file(tokenizer_path)
         print(f"✓ Tokenizer loaded (vocab_size: {len(tokenizer)})")
     except (AttributeError, ModuleNotFoundError) as e:
         print(f"Standard loading failed: {e}")
         print("Trying direct pickle load...")
-        # Direct pickle load - the function should be in __main__ now
         with open(tokenizer_path, 'rb') as f:
             tokenizer = pickle.load(f)
         print(f"✓ Tokenizer loaded (vocab_size: {len(tokenizer)})")
     
-    # Load model
-    model = A2Transformer.from_pretrained(model_dir)
-    print(f"✓ Model loaded")
+    # Load model - handles both pytorch_model.bin and model.safetensors formats
+    try:
+        # Check what model file exists
+        pytorch_model_path = os.path.join(model_dir, 'pytorch_model.bin')
+        safetensors_path = os.path.join(model_dir, 'model.safetensors')
+        
+        if os.path.exists(pytorch_model_path):
+            print(f"Found pytorch_model.bin format")
+        elif os.path.exists(safetensors_path):
+            print(f"Found model.safetensors format")
+        else:
+            print(f"⚠ Warning: No model file found in {model_dir}")
+            print(f"   Looking for: pytorch_model.bin or model.safetensors")
+        
+        # Load using from_pretrained (handles both formats)
+        model = A2Transformer.from_pretrained(model_dir)
+        print(f"✓ Model loaded successfully")
+        
+        # Verify it's the correct model type
+        import json
+        config_path = os.path.join(model_dir, 'config.json')
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                saved_config = json.load(f)
+            if saved_config.get('architectures', [None])[0] == 'A2Transformer':
+                print(f"✓ Verified: A2Transformer model")
+            else:
+                print(f"⚠ Warning: Model architecture is {saved_config.get('architectures')}")
+        
+    except Exception as e:
+        print(f"Error loading model: {e}")
+        import json
+        import traceback
+        traceback.print_exc()
+        config_path = os.path.join(model_dir, 'config.json')
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                saved_config = json.load(f)
+            print(f"Config file exists with keys: {list(saved_config.keys())}")
+            required_fields = ['hidden_size', 'num_attention_heads', 'rope_theta', 
+                              'intermediate_size', 'num_hidden_layers']
+            missing = [f for f in required_fields if f not in saved_config or saved_config[f] is None]
+            if missing:
+                print(f"⚠ Missing or None config fields: {missing}")
+        raise
     
     return model, tokenizer
 
 
-def predict_next(tokenizer, model, text, device, k=5):
-    """Predict the top-k next tokens given a text prompt.
+def predict_next_word(model, tokenizer, prompt, device):
+    """Predict the next word for a given prompt.
+    
+    Steps:
+    1. Apply the model to the integer-encoded input text
+    2. Take the model's output at the last position (avoid EOS)
+    3. Use argmax to find the index of the highest-scoring item
+    4. Apply the inverse vocabulary encoder to get the word
     
     Args:
+        model: The language model
         tokenizer: The tokenizer
-        model: The trained model
-        text: Input text string
+        prompt: Input text string
         device: torch device
-        k: Number of top predictions to return
     
     Returns:
-        List of top-k predicted tokens
+        The predicted next word (string)
     """
     model.eval()
     with torch.no_grad():
-        enc = tokenizer(text, return_tensors='pt', padding=False, truncation=True)
-        ids = enc["input_ids"].to(device)
-        X = ids[:, :-1]  # All tokens except the last (EOS)
-        logits = model(X)
-        last_logits = logits[:, -1, :]  # Get logits for the last position
-        topk = torch.topk(last_logits, k=k, dim=-1)
-        idxs = topk.indices[0].tolist()
-        return [tokenizer.id2word.get(i, tokenizer.unk_token) for i in idxs]
+        # Step 1: Apply the model to integer-encoded input text
+        enc = tokenizer(prompt, return_tensors='pt', padding=False, truncation=True)
+        input_ids = enc["input_ids"].to(device)
+        
+        # Apply model
+        logits = model(input_ids)  # Shape: [batch, seq_len, vocab_size]
+        
+        # Step 2: Take the model's output at the last position
+        # Make sure we avoid EOS token - use the position before the last if last is EOS
+        last_logits = logits[:, -1, :]  # Shape: [batch, vocab_size]
+        
+        # Step 3: Use argmax to find the index of the highest-scoring item
+        predicted_idx = torch.argmax(last_logits, dim=-1).item()
+        
+        # Step 4: Apply the inverse vocabulary encoder
+        predicted_word = tokenizer.id2word.get(predicted_idx, tokenizer.unk_token)
+        
+        return predicted_word
 
 
-def decode_token_ids(tokenizer, token_ids):
-    """Decode a list of token IDs back to text."""
-    tokens = [tokenizer.id2word.get(id, tokenizer.unk_token) for id in token_ids]
-    # Filter out special tokens for display
-    filtered_tokens = [t for t in tokens if t not in [tokenizer.bos_token, tokenizer.eos_token, tokenizer.pad_token]]
-    return ' '.join(filtered_tokens)
-
-
-def generate_text(tokenizer, model, prompt, device, max_length=50, temperature=1.0, top_k=50):
-    """Generate text autoregressively.
+def generate_text(model, tokenizer, prompt, device, max_length=50, temperature=1.0, topk=None):
+    """Generate text using random sampling.
     
     Args:
+        model: The language model
         tokenizer: The tokenizer
-        model: The trained model
-        prompt: Starting text
+        prompt: The prompt that initializes the text generation
         device: torch device
-        max_length: Maximum length of generated sequence
-        temperature: Sampling temperature (higher = more random)
-        top_k: Only sample from top-k tokens
+        max_length: Maximal number of steps before terminating
+        temperature: Controls the degree of randomness by scaling the predicted logits
+        topk: For top-K sampling, truncate distribution to topk most probable tokens (None = no truncation)
     
     Returns:
         Generated text string
@@ -123,19 +180,30 @@ def generate_text(tokenizer, model, prompt, device, max_length=50, temperature=1
         
         generated_ids = input_ids.clone()
         
-        for _ in range(max_length):
+        for step in range(max_length):
             # Get logits for the last token
-            logits = model(generated_ids)
-            next_token_logits = logits[:, -1, :] / temperature
+            logits = model(generated_ids)  # Shape: [batch, seq_len, vocab_size]
+            next_token_logits = logits[:, -1, :]  # Shape: [batch, vocab_size]
             
-            # Apply top-k filtering
-            if top_k > 0:
-                indices_to_remove = next_token_logits < torch.topk(next_token_logits, top_k)[0][..., -1, None]
-                next_token_logits[indices_to_remove] = float('-inf')
+            # Apply temperature scaling
+            next_token_logits = next_token_logits / temperature
             
-            # Sample from the distribution
-            probs = torch.softmax(next_token_logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)
+            # Apply top-K sampling if specified
+            if topk is not None and topk > 0:
+                # Get top-k values and indices
+                topk_values, topk_indices = torch.topk(next_token_logits, k=min(topk, next_token_logits.shape[-1]), dim=-1)
+                
+                # Create a tensor with -inf for all positions
+                filtered_logits = torch.full_like(next_token_logits, float('-inf'))
+                # Set top-k positions to their original values
+                filtered_logits.scatter_(-1, topk_indices, topk_values)
+                next_token_logits = filtered_logits
+            
+            # Sample from the distribution using Categorical
+            dist = Categorical(logits=next_token_logits)
+            next_token = dist.sample()  # Shape: [batch] = [1]
+            # Reshape to [batch, 1] to match generated_ids shape [batch, seq_len]
+            next_token = next_token.unsqueeze(1)  # Shape: [1, 1]
             
             # Append to generated sequence
             generated_ids = torch.cat([generated_ids, next_token], dim=1)
@@ -144,55 +212,86 @@ def generate_text(tokenizer, model, prompt, device, max_length=50, temperature=1
             if next_token.item() == tokenizer.eos_token_id:
                 break
         
-        # Convert back to text
-        generated_text = decode_token_ids(tokenizer, generated_ids[0].tolist())
-        return generated_text
+        # Convert token IDs back to text
+        generated_token_ids = generated_ids[0].tolist()
+        # Filter out special tokens for display
+        tokens = []
+        for token_id in generated_token_ids:
+            token = tokenizer.id2word.get(token_id, tokenizer.unk_token)
+            if token not in [tokenizer.bos_token, tokenizer.eos_token, tokenizer.pad_token]:
+                tokens.append(token)
+        
+        return ' '.join(tokens)
 
 
-def evaluate_perplexity(tokenizer, model, texts, device, batch_size=32):
-    """Evaluate perplexity on a list of texts.
+def load_olmo_model(local_dir='/data/courses/2025_dat450_dit247/models/OLMo-2-0425-1B'):
+    """Load the pre-trained OLMo-2 model for comparison.
     
-    Args:
-        tokenizer: The tokenizer
-        model: The trained model
-        texts: List of text strings
-        device: torch device
-        batch_size: Batch size for evaluation
-    
-    Returns:
-        Average perplexity
+    Note: This model returns CausalLMOutputWithPast, so we need to access .logits
     """
-    from torch.utils.data import DataLoader
-    from datasets import Dataset
-    
+    try:
+        from transformers import AutoTokenizer, AutoModelForCausalLM
+        
+        if not os.path.exists(local_dir):
+            print(f"OLMo model directory not found: {local_dir}")
+            print("Skipping OLMo model loading.")
+            return None, None
+        
+        print(f"Loading OLMo-2 model from: {local_dir}")
+        tokenizer = AutoTokenizer.from_pretrained(local_dir, local_files_only=True)
+        model = AutoModelForCausalLM.from_pretrained(local_dir, local_files_only=True)
+        print("✓ OLMo-2 model loaded")
+        return model, tokenizer
+    except Exception as e:
+        print(f"Could not load OLMo model: {e}")
+        return None, None
+
+
+def generate_text_with_olmo(model, tokenizer, prompt, device, max_length=50, temperature=1.0, topk=None):
+    """Generate text using OLMo model (handles CausalLMOutputWithPast)."""
     model.eval()
-    loss_func = torch.nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
-    V = model.config.vocab_size
-    
-    dataset = Dataset.from_dict({"text": texts})
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-    
-    total_loss = 0.0
-    total_tokens = 0
-    
     with torch.no_grad():
-        for batch in loader:
-            batch_texts = batch["text"]
-            enc = tokenizer(batch_texts, padding=True, truncation=True, return_tensors="pt")
-            ids = enc["input_ids"].to(device)
-            X, Y = ids[:, :-1], ids[:, 1:]
+        # Tokenize the prompt
+        enc = tokenizer(prompt, return_tensors='pt', padding=False, truncation=True)
+        input_ids = enc["input_ids"].to(device)
+        
+        generated_ids = input_ids.clone()
+        
+        for step in range(max_length):
+            # Get logits - OLMo returns CausalLMOutputWithPast, need .logits
+            output = model(generated_ids)
+            if hasattr(output, 'logits'):
+                logits = output.logits
+            else:
+                logits = output  # Fallback if it's already logits
             
-            logits = model(X)
-            loss = loss_func(logits.reshape(-1, V), Y.reshape(-1))
+            next_token_logits = logits[:, -1, :]
             
-            num_tokens = (Y != tokenizer.pad_token_id).sum().item()
-            total_loss += loss.item() * num_tokens
-            total_tokens += num_tokens
-    
-    avg_ce = total_loss / max(1, total_tokens)
-    perplexity = float(torch.exp(torch.tensor(avg_ce)))
-    
-    return perplexity, avg_ce
+            # Apply temperature
+            next_token_logits = next_token_logits / temperature
+            
+            # Apply top-K if specified
+            if topk is not None and topk > 0:
+                topk_values, topk_indices = torch.topk(next_token_logits, k=min(topk, next_token_logits.shape[-1]), dim=-1)
+                filtered_logits = torch.full_like(next_token_logits, float('-inf'))
+                filtered_logits.scatter_(-1, topk_indices, topk_values)
+                next_token_logits = filtered_logits
+            
+            # Sample
+            dist = Categorical(logits=next_token_logits)
+            next_token = dist.sample()  # Shape: [batch] = [1]
+            # Reshape to [batch, 1] to match generated_ids shape [batch, seq_len]
+            next_token = next_token.unsqueeze(1)  # Shape: [1, 1]
+            
+            generated_ids = torch.cat([generated_ids, next_token], dim=1)
+            
+            # Stop at EOS
+            if next_token.item() == tokenizer.eos_token_id:
+                break
+        
+        # Decode
+        generated_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+        return generated_text
 
 
 if __name__ == "__main__":
@@ -206,50 +305,79 @@ if __name__ == "__main__":
     
     print(f"Using device: {device}\n")
     
-    # Load model and tokenizer
+    # Load the pre-trained Transformer model
+    print("="*60)
+    print("LOADING PRE-TRAINED TRANSFORMER MODEL")
+    print("="*60)
     model, tokenizer = load_model_and_tokenizer()
     model.to(device)
     model.eval()
     
     print("\n" + "="*60)
-    print("INFERENCE EXAMPLES")
-    print("="*60 + "\n")
+    print("1. PREDICTING NEXT WORD")
+    print("="*60)
     
-    # Example 1: Predict next tokens
-    print("1. Top-5 next token predictions:")
-    print("-" * 60)
+    # Example prompts for next word prediction
     test_prompts = [
-        "She lives in San",
+        "he lives in san",
         "The capital of France is",
         "In the beginning",
-        "The quick brown",
         "Machine learning is"
     ]
     
     for prompt in test_prompts:
-        top5 = predict_next(tokenizer, model, prompt, device, k=5)
-        print(f"  '{prompt}' → {top5}")
+        predicted_word = predict_next_word(model, tokenizer, prompt, device)
+        print(f"  '{prompt}' → {predicted_word}")
     
     print("\n" + "="*60)
-    print("2. Text generation (autoregressive):")
-    print("-" * 60)
+    print("2. GENERATING TEXTS")
+    print("="*60)
     
-    # Example 2: Generate text
+    # Example prompts for text generation
     generation_prompts = [
-        "The weather today is",
-        "Once upon a time",
-        "Artificial intelligence"
+        'In natural language processing, a Transformer',
+        'Is Stockholm the capital of Sweden? Answer yes or no. The answer is',
+        'Write a Python program that reverses a list.'
     ]
     
+    print("\n--- Default parameters (temperature=1.0, topk=None) ---")
     for prompt in generation_prompts:
-        generated = generate_text(
-            tokenizer, model, prompt, device, 
-            max_length=30, temperature=0.8, top_k=50
-        )
-        print(f"  Prompt: '{prompt}'")
-        print(f"  Generated: {generated}")
-        print()
+        generated = generate_text(model, tokenizer, prompt, device, max_length=50, temperature=1.0, topk=None)
+        print(f"\nPrompt: '{prompt}'")
+        print(f"Generated: {generated}")
     
+    print("\n--- With temperature=0.8, topk=50 ---")
+    for prompt in generation_prompts:
+        generated = generate_text(model, tokenizer, prompt, device, max_length=50, temperature=0.8, topk=50)
+        print(f"\nPrompt: '{prompt}'")
+        print(f"Generated: {generated}")
+    
+    print("\n--- With temperature=1.5, topk=100 ---")
+    for prompt in generation_prompts:
+        generated = generate_text(model, tokenizer, prompt, device, max_length=50, temperature=1.5, topk=100)
+        print(f"\nPrompt: '{prompt}'")
+        print(f"Generated: {generated}")
+    
+    # Try loading OLMo-2 model for comparison
+    print("\n" + "="*60)
+    print("3. COMPARING TO PRE-TRAINED OLMo-2 MODEL")
     print("="*60)
+    
+    olmo_model, olmo_tokenizer = load_olmo_model()
+    
+    if olmo_model is not None and olmo_tokenizer is not None:
+        olmo_model.to(device)
+        olmo_model.eval()
+        
+        print("\n--- OLMo-2 predictions (temperature=0.8, topk=50) ---")
+        for prompt in generation_prompts:
+            generated = generate_text_with_olmo(olmo_model, olmo_tokenizer, prompt, device, 
+                                                max_length=50, temperature=0.8, topk=50)
+            print(f"\nPrompt: '{prompt}'")
+            print(f"Generated: {generated}")
+    else:
+        print("\nOLMo-2 model not available. Skipping comparison.")
+    
+    print("\n" + "="*60)
     print("Inference complete!")
-
+    print("="*60)
