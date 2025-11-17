@@ -60,13 +60,12 @@ class A2Attention(nn.Module):
         self.hidden_size = config.hidden_size
         self.head_dim = config.hidden_size // config.num_attention_heads
         
-        # Linear layers for query, key, value, and output projections (no bias)
         self.W_q = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
         self.W_k = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
         self.W_v = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
         self.W_o = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
         
-        # Normalizers after query and key representations
+        # normalizers 
         self.q_norm = A2RMSNorm(config)
         self.k_norm = A2RMSNorm(config)
 
@@ -75,30 +74,23 @@ class A2Attention(nn.Module):
         n_h = self.num_attention_heads
         d_h = self.head_dim
         
-        # Compute query, key, and value representations
         q = self.W_q(hidden_states)
         k = self.W_k(hidden_states)
         v = self.W_v(hidden_states)
         
-        # Apply normalizers to query and key
         q = self.q_norm(q)
         k = self.k_norm(k)
         
-        # Reshape for multi-head attention: (b, m, n_h, d_h) then transpose to (b, n_h, m, d_h)
         q = q.view(b, m, n_h, d_h).transpose(1, 2)
         k = k.view(b, m, n_h, d_h).transpose(1, 2)
         v = v.view(b, m, n_h, d_h).transpose(1, 2)
         
-        # Apply RoPE rotations to query and key
+        #RoPE
         q, k = apply_rotary_pos_emb(q, k, rope_rotations)
         
-        # Compute scaled dot-product attention with causal masking
         attn_out = nn.functional.scaled_dot_product_attention(q, k, v, is_causal=True)
-        
-        # Combine attention heads: transpose to (b, m, n_h, d_h) then reshape to (b, m, d)
         attn_out = attn_out.transpose(1, 2).reshape(b, m, d)
         
-        # Apply output projection
         output = self.W_o(attn_out)
         
         return output
@@ -108,25 +100,19 @@ class A2DecoderLayer(nn.Module):
     """A complete Transformer decoder layer."""
     def __init__(self, config):
         super().__init__()
-        # Normalizer before attention (pre-norm)
         self.pre_attention_norm = A2RMSNorm(config)
-        # Multi-head attention layer
         self.attention = A2Attention(config)
-        # Normalizer before MLP (pre-norm)
         self.pre_mlp_norm = A2RMSNorm(config)
-        # MLP layer
         self.mlp = A2MLP(config)
 
     def forward(self, hidden_states, rope_rotations):
-        # Pre-norm attention with residual connection
         attn_input = self.pre_attention_norm(hidden_states)
         attn_output = self.attention(attn_input, rope_rotations)
-        hidden_states = attn_output + hidden_states  # residual connection
+        hidden_states = attn_output + hidden_states  #residual
         
-        # Pre-norm MLP with residual connection
         mlp_input = self.pre_mlp_norm(hidden_states)
         mlp_output = self.mlp(mlp_input)
-        hidden_states = mlp_output + hidden_states  # residual connection
+        hidden_states = mlp_output + hidden_states  # residual 
         
         return hidden_states
 
@@ -140,49 +126,32 @@ class A2Transformer(PreTrainedModel):
         super().__init__(config)
 
         self.rotary_emb = A2RotaryEmbedding(config)
-        
-        # Token embedding layer (vocab_size -> hidden_size)
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
         
-        # Transformer decoder layers in a ModuleList
         self.layers = nn.ModuleList([
             A2DecoderLayer(config) for _ in range(config.num_hidden_layers)
         ])
-        
-        # Final normalizer
         self.norm = A2RMSNorm(config)
         
-        # Unembedding layer (hidden_size -> vocab_size, no bias)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
-
         self.post_init()
-        # Tie weights: share embedding and output projection (common in language models)
         self.lm_head.weight = self.embed_tokens.weight
-        # Tell transformers about tied weights for proper saving
         #self._tied_weights_keys = [("embed_tokens.weight", "lm_head.weight")]
 
 
     def forward(self, input_ids):
-        rope_rotations = self.rotary_emb(input_ids) # pass this to all the transformer decoder layers
-
-        # Apply token embeddings
-        hidden_states = self.embed_tokens(input_ids)
-        
-        # Pass through all transformer decoder layers
+        rope_rotations = self.rotary_emb(input_ids) 
+        hidden_states = self.embed_tokens(input_ids)        
         for layer in self.layers:
-            hidden_states = layer(hidden_states, rope_rotations)
-        
-        # Apply final normalizer
+            hidden_states = layer(hidden_states, rope_rotations)        
         hidden_states = self.norm(hidden_states)
-        
-        # Apply unembedding to get logits
         logits = self.lm_head(hidden_states)
         
         return logits
 
 
-#### RoPE implementation (copied and simplified from HuggingFace). ####
+# RoPE (copied and simplified from HuggingFace). 
 
 def apply_rotary_pos_emb(q, k, rope_rotations, unsqueeze_dim=1):
     """Applies precomputed RoPE rotations to the query and key representations."""
@@ -230,7 +199,7 @@ class A2RotaryEmbedding(nn.Module):
             return cos, sin
 
 
-#### Simple test code ####
+# Simple test code 
 """
 if __name__ == "__main__":
     # Create a simple configuration for testing
