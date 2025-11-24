@@ -1,40 +1,43 @@
+from typing import Any
+
+
 import numpy as np
 from sklearn.datasets import fetch_20newsgroups
 from sklearn.feature_extraction.text import CountVectorizer
 import matplotlib.pyplot as plt
-def load_corpus_20news(max_docs=2000):
-    data = fetch_20newsgroups(
-        subset="train",
-        remove=("headers", "footers", "quotes")
-    )
+
+
+def load_corpus(max_docs=2000):
+    data = fetch_20newsgroups(subset="train",remove=("headers", "footers", "quotes"))
+    
     texts = data.data[:max_docs]
     return texts
 
 def preprocess_corpus(texts, min_df=10):
-    vectorizer = CountVectorizer(
-        lowercase=True,
-        stop_words="english",
-        min_df=min_df
-    )
-    X = vectorizer.fit_transform(texts)  # shape: (D, V)
+    vectorizer = CountVectorizer(lowercase=True,stop_words="english",min_df=min_df)
+    X = vectorizer.fit_transform(texts)  # (D, V)
     vocab = np.array(vectorizer.get_feature_names_out())
     D, V = X.shape
 
-    # Convert sparse doc-word counts to per-token word-id lists
+
+    # sparse docword to pertoken wordid 
     docs_word_ids = []
     for d in range(D):
         row = X.getrow(d)
+        
+        
         word_indices = row.indices
         counts = row.data
         tokens = []
-        for w, c in zip(word_indices, counts):
+        for w, c in zip[tuple](word_indices, counts):
             tokens.extend([w] * c)
         docs_word_ids.append(tokens)
 
-    # For UMass coherence: docs that contain each word
+    #umass coherence
     docs_with_word = [set() for _ in range(V)]
     for d in range(D):
         row = X.getrow(d)
+        
         for w in row.indices:
             docs_with_word[w].add(d)
 
@@ -52,59 +55,61 @@ class LDAGibbsSampler:
         self.beta = beta
         self.iterations = iterations
         self.rng = rng
-
-        # Topic assignment for each token: list of list
         self.z = []
-
-        # Counts
-        self.ndk = np.zeros((self.D, self.K), dtype=np.int32)   # n_d(k)
-        self.mkv = np.zeros((self.K, self.V), dtype=np.int32)   # m_k(v)
-        self.mk = np.zeros(self.K, dtype=np.int32)              # m_k
-
+        self.ndk = np.zeros((self.D, self.K), dtype=np.int32)
+        self.mkv = np.zeros((self.K, self.V), dtype=np.int32)
+        self.mk = np.zeros(self.K, dtype=np.int32)
         self._initialize()
 
     def _initialize(self):
-        # Randomly assign topics to each token
         for d, doc in enumerate(self.docs):
             doc_topics = []
+            
             for w in doc:
                 k = self.rng.randint(self.K)
                 doc_topics.append(k)
                 self.ndk[d, k] += 1
+                
                 self.mkv[k, w] += 1
                 self.mk[k] += 1
             self.z.append(doc_topics)
 
     def run(self, verbose=True):
         Vbeta = self.V * self.beta
+        
+        
         for it in range(self.iterations):
+            
             for d, doc in enumerate(self.docs):
                 for i, w in enumerate(doc):
                     k_old = self.z[d][i]
+                    
 
-                    # remove old assignment
+                    # remove old
                     self.ndk[d, k_old] -= 1
                     self.mkv[k_old, w] -= 1
                     self.mk[k_old] -= 1
 
-                    # compute q_k ∝ (α + n_dk^-dj) * (β + m_kv^-dj) / (Vβ + m_k^-dj)
-                    left = self.alpha + self.ndk[d]          # shape (K,)
-                    right_num = self.beta + self.mkv[:, w]   # shape (K,)
+                    # compute
+                    left = self.alpha + self.ndk[d]          #(K,)
+                    right_num = self.beta + self.mkv[:, w]   # (K,)
                     right_den = Vbeta + self.mk
+                    
                     q = left * right_num / right_den
 
-                    # normalize to probabilities
+                    #normalize
                     q_sum = q.sum()
                     if q_sum == 0:
                         q = np.ones(self.K) / self.K
+                        
                     else:
                         q = q / q_sum
 
-                    # sample new topic
+
+                    # sample new
                     k_new = self.rng.choice(self.K, p=q)
                     self.z[d][i] = k_new
-
-                    # add new assignment
+                    # add new
                     self.ndk[d, k_new] += 1
                     self.mkv[k_new, w] += 1
                     self.mk[k_new] += 1
@@ -113,10 +118,7 @@ class LDAGibbsSampler:
                 print(f"Iteration {it + 1}/{self.iterations} finished")
 
     def estimate_phi_theta(self):
-        # φ_kv = (m_kv + β) / (m_k + Vβ)
         phi = (self.mkv + self.beta) / (self.mk[:, None] + self.V * self.beta)
-
-        # θ_dk = (n_dk + α) / (N_d + Kα)
         theta = np.zeros_like(self.ndk, dtype=float)
         for d, doc in enumerate(self.docs):
             Nd = len(doc)
@@ -127,7 +129,9 @@ class LDAGibbsSampler:
     def top_words(self, phi, vocab, top_n=20):
         topics = []
         for k in range(self.K):
+            
             top_indices = np.argsort(phi[k])[::-1][:top_n]
+            
             topics.append([(vocab[i], float(phi[k, i])) for i in top_indices])
         return topics
 def umass_coherence_for_topic(word_indices, docs_with_word):
@@ -145,6 +149,7 @@ def umass_coherence_for_topic(word_indices, docs_with_word):
             w_l = word_indices[l]
             docs_l = docs_with_word[w_l]
             D_wl = len(docs_l)
+            
             if D_wl == 0:
                 continue
             D_wmwl = len(docs_m & docs_l)
@@ -155,6 +160,10 @@ def umass_coherence_for_topic(word_indices, docs_with_word):
         return 0.0
     return score / count_pairs
 
+
+
+
+
 def compute_topic_coherences(topics, vocab, docs_with_word):
     coherences = []
     for topic in topics:
@@ -163,10 +172,10 @@ def compute_topic_coherences(topics, vocab, docs_with_word):
         coherences.append(c)
     return np.array(coherences)
 def run_experiments():
-    texts = load_corpus_20news(max_docs=2000)
+    texts = load_corpus(max_docs=2000)
     docs_word_ids, vocab, docs_with_word = preprocess_corpus(texts, min_df=10)
     V = len(vocab)
-    print(f"Documents: {len(docs_word_ids)}, Vocabulary size: {V}")
+    print(f"Documents: {len(docs_word_ids)} vocab size: {V}")
 
     settings = [
         (10, 0.1, 0.1),
@@ -176,23 +185,25 @@ def run_experiments():
     ]
 
     for K, alpha, beta in settings:
-        print("\n" + "=" * 60)
-        print(f"Running LDA with K={K}, alpha={alpha}, beta={beta}")
+        
+        print(f"Running LDA K={K} alpha={alpha} beta={beta}")
+        
         lda = LDAGibbsSampler(
             docs_word_ids,
             V,
             K=K,
             alpha=alpha,
+            
             beta=beta,
             iterations=150,
             random_state=0
         )
+        
         lda.run(verbose=True)
         phi, theta = lda.estimate_phi_theta()
         topics = lda.top_words(phi, vocab, top_n=20)
         coherences = compute_topic_coherences(topics, vocab, docs_with_word)
 
-        # Sort topics by coherence (descending)
         order = np.argsort(coherences)[::-1]
 
         print("\nTop 5 topics by UMass coherence:")
@@ -201,7 +212,7 @@ def run_experiments():
             words = [w for (w, p) in topics[idx]]
             print(", ".join(words))
 
-        # Simple visual evaluation: coherence bar plot
+        #coherence bar plot
         plt.figure()
         plt.bar(range(K), coherences)
         plt.xlabel("Topic index")

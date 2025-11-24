@@ -1,7 +1,6 @@
 
 Documents: 2000, Vocabulary size: 2525
 
-============================================================
 Running LDA with K=10, alpha=0.1, beta=0.1
 Iteration 10/150 finished
 Iteration 20/150 finished
@@ -37,7 +36,6 @@ Topic 9 (coherence=-1.714):
 armenian, people, turkish, armenians, genocide, health, world, soviet, government, war, israel, national, russian, united, american, states, killed, washington, state, 
 million
 
-============================================================
 Running LDA with K=50, alpha=0.1, beta=0.1
 Iteration 10/150 finished
 Iteration 20/150 finished
@@ -72,7 +70,6 @@ space, orbit, launch, earth, moon, solar, high, energy, cost, mission, design, a
 Topic 8 (coherence=-1.614):
 just, think, don, like, really, lot, way, better, going, good, little, probably, makes, wrong, ve, long, bit, does, know, make
 
-============================================================
 Running LDA with K=10, alpha=0.01, beta=0.01
 Iteration 10/150 finished
 Iteration 20/150 finished
@@ -107,7 +104,6 @@ don, just, like, know, think, good, year, time, really, way, make, better, ll, g
 Topic 4 (coherence=-1.847):
 file, use, windows, output, program, problem, files, does, line, know, time, os, tape, thanks, like, need, info, using, data, help
 
-============================================================
 Running LDA with K=50, alpha=0.01, beta=0.01
 Iteration 10/150 finished
 Iteration 20/150 finished
