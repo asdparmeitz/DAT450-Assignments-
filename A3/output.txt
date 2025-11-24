@@ -1,0 +1,37 @@
+Documents: 2000, Vocabulary size: 2525
+
+============================================================
+Running LDA with K=10, alpha=0.1, beta=0.1
+Iteration 10/150 finished
+Iteration 20/150 finished
+Iteration 30/150 finished
+Iteration 40/150 finished
+Iteration 50/150 finished
+Iteration 60/150 finished
+Iteration 70/150 finished
+Iteration 80/150 finished
+Iteration 90/150 finished
+Iteration 100/150 finished
+Iteration 110/150 finished
+Iteration 120/150 finished
+Iteration 130/150 finished
+Iteration 140/150 finished
+Iteration 150/150 finished
+
+Top 5 topics by UMass coherence:
+
+Topic 5 (coherence=-1.379):
+00, 10, 20, 15, 12, 30, period, 25, 11, dos, 13, 19, 1993, 14, 21, 18, 16, 17, power, 50
+
+Topic 7 (coherence=-1.474):
+max, 145, 17, 34, 04, ma, 24, 75, 14, ah, sp, 27, tm, 45, good, au, 50, excellent, mr, al
+
+Topic 6 (coherence=-1.574):
+god, jesus, people, think, does, believe, argument, say, true, know, way, don, truth, did, christian, things, make, example, like, bible
+
+Topic 8 (coherence=-1.668):
+people, government, gun, key, law, just, don, public, use, does, like, chip, clipper, make, encryption, question, questions, know, time, right
+
+Topic 9 (coherence=-1.714):
+armenian, people, turkish, armenians, genocide, health, world, soviet, government, war, israel, national, russian, united, american, states, killed, washington, state, 
+million
