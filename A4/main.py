@@ -12,9 +12,9 @@ from transformers import (
     TrainingArguments,
 )
 
-from .data_utils import build_prompt, create_data_collator, tokenize_helper
-from .lora import make_lora_model
-from .utils import (
+from data_utils import build_prompt, create_data_collator, tokenize_helper
+from lora import make_lora_model
+from utils import (
     RougeMetricComputer,
     compare_models_on_examples,
     create_stratification_label,
@@ -169,12 +169,13 @@ def main():
 
     pretrained_eval_args = TrainingArguments(
         output_dir=os.path.join(args.output_dir, "pretrained"),
-        eval_strategy="no",
+        eval_strategy="epoch",
         per_device_eval_batch_size=1,
         fp16=torch.cuda.is_available(),
         report_to="none",
         batch_eval_metrics=True,
         eval_accumulation_steps=1,
+        num_train_epochs=args.num_epochs,
     )
 
     pretrained_trainer = make_trainer(
