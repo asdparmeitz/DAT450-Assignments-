@@ -34,20 +34,29 @@ class LoRA(nn.Module):
         # Always keep a reference to the frozen pretrained weight matrix.
         self.pretrained = pretrained
 
-        # TODO[student]: Initialize the low-rank adapter matrices A and B.
+        # [student]: Initialize the low-rank adapter matrices A and B.
         #   * Inspect `pretrained.weight.shape` to find the input and output dims.
         #   * Create `self.A` (shape: in_dim -> rank) and `self.B` (rank -> out_dim).
         #   * Initialize A with a small normal distribution and B with zeros.
         #   * Store the scaling factor alpha / rank in `self.scaling`.
         # Remove the line below once your implementation is ready.
-        raise NotImplementedError("Initialize LoRA adapter weights (A, B) and scaling.")
+        in_dim, out_dim = pretrained.weight.shape[1], pretrained.weight.shape[0]
+        
+        self.A = nn.Parameter(torch.randn(in_dim, rank))
+        nn.init.normal_(self.A, mean=0.0, std=0.02)
+        
+        self.B = nn.Parameter(torch.zeros(rank, out_dim))
+        self.scaling = alpha / rank
 
     def forward(self, x):
-        # TODO[student]: Implement the LoRA forward pass.
+        # [student]: Implement the LoRA forward pass.
         #   * Compute the frozen projection using `self.pretrained(x)`.
         #   * Add the low-rank update `self.B(self.A(x)) * self.scaling`.
         #   * Return the combined result.
-        raise NotImplementedError("Implement the LoRA forward pass.")
+        frozen_output = self.pretrained(x)
+        
+        lora_output = torch.matmul(torch.matmul(x, self.A), self.B) * self.scaling
+        return frozen_output + lora_output
 
 
 def extract_lora_targets(model):
@@ -61,8 +70,14 @@ def extract_lora_targets(model):
         such as 'q_proj', 'k_proj', 'v_proj', or 'o_proj'.
       * Return a dict {qualified_name: module}.
     """
-    # TODO[student]: populate the dictionary with eligible layers.
-    raise NotImplementedError("Select and return the target Linear layers.")
+    # [student]: populate the dictionary with eligible layers.
+    target_layers = {}
+    
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear) and ('q_proj' in name or 'v_proj' in name):
+            target_layers[name] = module
+    
+    return target_layers
 
 
 def replace_layers(model, named_layers):

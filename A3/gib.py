@@ -1,6 +1,3 @@
-from typing import Any
-
-
 import numpy as np
 from sklearn.datasets import fetch_20newsgroups
 from sklearn.feature_extraction.text import CountVectorizer
@@ -29,7 +26,7 @@ def preprocess_corpus(texts, min_df=10):
         word_indices = row.indices
         counts = row.data
         tokens = []
-        for w, c in zip[tuple](word_indices, counts):
+        for w, c in zip(word_indices, counts):
             tokens.extend([w] * c)
         docs_word_ids.append(tokens)
 
